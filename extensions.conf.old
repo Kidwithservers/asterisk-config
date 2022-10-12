@@ -1,0 +1,250 @@
+;;;;;;;;; NPSTN NA 201905011 - Boilerplate Template for New NPSTN Nodes
+#include verification.conf ; this includes /etc/asterisk/verification.conf in the main Asterisk dialplan (loaded via extensions.conf)
+
+[globals] ; Global variables that persist across all calls are defined here
+; "Core" variables that MUST be defined on ALL NPSTN nodes
+clli=NPSTNNYOC1 ; the unique CLLI of your node
+zipcode=12553 ; your ZIP code (00000 for nodes outside the U.S.A.)
+maindisa=3931111 ; number to your primary DISA (if you don't have one, then any number that comes into your switch from NPSTN)
+allowdisathru=YES ; See npstn.us/docs/ to learn more about what this variable does
+allowpstnthru=NO ; See npstn.us/docs/ to learn more about what this variable does
+npstnkey=h64dnpz1w8BMydZ1OclJ19xVnSPxlvQz ; your NPSTN UCP auth key (dial the business office at 116 or (407) 564-4141 if you need one)
+
+dialtone=custom/signal/dialtone ; File path to audio file
+busy=custom/signal/busy ; File path to audio file
+reorder=custom/signal/reorder ; File path to audio file
+ccad=custom/signal/ccad ; File path to audio file
+acbn=custom/signal/acbn ; File path to audio file
+DTXB=city/xb_dialtone
+; Number range assignments assignments
+OC1=393 ; your office code's NNX (NOT NNX-X, whether or not you have all its thousands blocks) - create OC2, OC3, etc. if you have multiple blocks
+		; This sample implementation assumes the thousand blocks 555-1 and 555-9 have been assigned (adjust accordingly based on YOUR assignment)
+		; The individual extensions pre-created in [local] all adhere to the NPSTN numbering standards
+
+[local]
+exten => ${OC1}9XXX,1,GoTo(ata,${EXTEN},1) ; See if any other numbers in this number block are possibly ATAs
+exten => ${OC1}1111,1,GoTo(dt,s,1) ; DISA access
+exten => ${OC1}9901,1,Progress() "Switch verification"
+	same => n,SayAlpha(${clli}) ;
+	same => n,Hangup()
+exten => ${OC1}9931,1,GoTo(echotest,s,1) ; Echo test
+exten => ${OC1}9932,1,Answer() ; Calls that may last a while that won't get answered by a real person are best answered right away
+	same => n,Wait(7200) ; Silent termination
+	same => n,Hangup()
+exten => ${OC1}9960,1,GoSub(mwtone,s,1) ; Milliwatt test tone
+	same => n,Hangup()
+exten => ${OC1}9970,1,GoSub(busy,s,1) ; Always busy
+	same => n,Hangup()
+exten => ${OC1}9971,1,GoSub(reorder,s,1) ; Always reorder
+	same => n,Hangup()
+exten => ${OC1}9990,1,Answer() ; Calls that may last a while that won't get answered by a real person are best answered right away
+	same => n,Dial(Local/ring@ringout,,m(ringback)) ; Number that always rings "forever"
+exten => 8,1,goto(disa,s,1)
+exten => 3931111,1,goto(disa,s,1)
+
+[ringout]
+exten => ring,1,Wait(7200)
+	same => n,Hangup()
+
+[private] ; Any extensions you want to be able to dial but want to keep off-limits to outside callers
+exten => 9876,1,Answer()
+	same => n,Hangup()
+
+;;; Any additional contexts you need
+[echotest] ; Echo test
+exten => s,1,Answer()
+	same => n,Echo()
+	same => n,Hangup()
+
+[mwtone] ; Milliwatt test tone
+exten => s,1,Progress()
+	same => n,SET(VOLUME(TX)=8)
+	same => n,Wait(0.5)
+	same => n,PlayTones(1004/1000)
+	same => n,Wait(600)
+	same => n,SET(VOLUME(TX)=1)
+	same => n,Return
+
+[from-npstn] ; Incoming calls from NPSTN
+exten => _X!,1,GoSub(npstn-verify,${EXTEN},1)
+	same => n,GotoIf($["${clidverif}"="11"]?:accept)
+	same => n,GotoIf($[${GROUP_COUNT(npstnspam@cvs)}<5]?:reject)
+	same => n(accept),GoTo(external-users,${EXTEN},1)
+	same => n(reject),Hangup()
+
+[external-users] ; External calls from various places (NPSTN, possibly C*NET, PSTN, and other networks, arrive here)
+include => local ; Include the contents of the [local] context
+
+[internal-users]
+include => private ; Note: accessible only by *direct* dialing from ATA lines (not via DISA)
+include => local
+
+[from-internal] ; Incoming calls from local SIP devices
+exten => 8,1,GoTo(dt,DTXB,1) ;Use extension "8" for ATA off-hook auto-dial for immediate NPSTN city dialtone (could likewise do 9 for PSTN, 7 for C*NET, etc.)
+;exten => _X!,1,Set(CHANNEL(hangup_handler_push)=npstnbilling,${EXTEN},1(${STRFTIME(${EPOCH},,%s)},${STRFTIME(${EPOCH},,%Y-%m-%d %H:%M:%S)}))
+;	same => n,GoTo(local,${exten},1)
+
+[busy] ; Busy signal (~60ipm)
+exten => s,1,Playback(${busy},noanswer)
+	;same => n,GoTo(1) ; to loop the busy signal, uncomment this line
+	same => n,Return()
+
+[reorder] ; Reorder signal (~120ipm)
+exten => s,1,Playback(${reorder},noanswer)
+	;same => n,GoTo(1) ; to loop the reorder signal, uncomment this line
+	same => n,Return()
+
+[invalidincoming]
+exten => s,1,Progress()
+	same => n,Playback(custom/ccad,noanswer)
+	same => n,Hangup()
+
+[allcktsbusy] ; All Circuits Busy Intercept
+exten => s,1,Playback(${acbn},noanswer)
+	same => n,Return()
+
+[clunkcomplete]
+exten => start,1,Playback(custom/clunk,noanswer)
+	same => n,Return()
+
+;;;;;;;;;;;;;;;;;;;;;;
+; start of disa code ;
+;;;;;;;;;;;;;;;;;;;;;;
+[numclear] ; NPSTN 20190212 NA
+exten => s,1,Return(,,,,,,,,,0,0)
+
+[clanglookup] ; NPSTN 20190212 NA
+exten => DTXB,1,Return(dialclang1a,dialclang2a,dialclang3a,dialclang4a,dialclang5a,dialclang6a,dialclang${RAND(1,6)},dialclang7)
+exten => _DT.,1,GoTo(DTXB,1)
+
+[dtlooplookup]
+exten => _DT.,1,Return(0)
+
+[dt] ; NPSTN 20190212 NA
+exten => _DT.,1,Answer
+	same => n,GoSub(clanglookup,${EXTEN},1)
+	same => n,Set(ARRAY(clang1,clang2,clang3,clang4,clang5,clang6,clang7,clang8)=${GOSUB_RETVAL})
+	same => n(begin),GoSub(numclear,s,1)
+	same => n,Set(ARRAY(num,num1,num2,num3,num4,num5,num6,num7,digit,clangcount)=${GOSUB_RETVAL})
+	; added veriable definiton to prevent a crash
+	same => n,Set(digit=0)
+	same => n(digit1),Set(digit=$[${digit}+1])
+	same => n(read1),Set(TIMEOUT(response)=0)
+	same => n,Read(num${digit},custom/switch/tones/dialtones/${$[${EXTEN}]},1)
+	same => n,GoSub(dtlooplookup,${EXTEN},1)
+	same => n,GotoIf($["${GOSUB_RETVAL}"="1"]?loopyes:loopno)
+	same => n(loopyes),GotoIf($["${$[num${digit}]}"=""]?read1:postloopcheck)
+	same => n(loopno),GotoIf($["${$[num${digit}]}"=""]?dtroute,permsig,1)
+	same => n(postloopcheck),GoTo(processdigit)
+	same => n(nextdigit),Set(digit=$[${digit}+1])
+	same => n,Set(clangcount=$[${clangcount}+1])
+	same => n,Read(num${digit},custom/dialsounds/${$[clang${clangcount}]},1)
+	same => n,GotoIf($["${$[num${digit}]}"=""]?dtroute,${num},1)
+	same => n,GotoIf($["${LEN(${num})}"="7"]?dialclang8)
+	same => n,GoTo(processdigit)
+	same => n(dialclang8),Playback(custom/dialsounds/${clang8})
+	same => n(processdigit),Set(num=${num}${$[num${digit}]})
+	same => n,GoSub(dtcheck,${num},1)
+	same => n,Set(ARRAY(lineaction,linereturn,lineclunk)=${GOSUB_RETVAL})
+	same => n,GotoIf($[${lineaction}=TERMINATE]?terminate)
+	same => n,GoTo(nextdigit)
+	same => n(terminate),Set(TIMEOUT(response)=15)
+	same => n,GotoIf($[${lineclunk}=no]?linereturn)
+	same => n,GoSub(clunkcomplete,start,1)
+	same => n(linereturn),GotoIf($[${linereturn}=yes]?dialyes)
+	same => n(dialno),GoTo(dtroute,${num},1)
+	same => n(dialyes),Set(ss=${STRFTIME(${EPOCH},,%s)})
+	same => n,Set(tt=${STRFTIME(${EPOCH},,%Y-%m-%d %H:%M:%S)})
+	same => n,Set(__dtnum=${num})
+	same => n,Set(__ticketed=0)
+	same => n,Dial(Local/${num}@dtroute,${DTL1XB},g)
+	same => n,GotoIf($["${DIALSTATUS}"="ANSWER"]?answered)
+	same => n,Set(ss=)
+	same => n(answered),GoSub(npstnbilling,${num},1(${ss},${tt}))
+	same => n(postticket),Set(__ticketed=1)
+	same => n,GoTo(begin)
+exten => h,1,GotoIf($["${DIALSTATUS}"="ANSWER"]?:done)
+	same => n,GotoIf($["${ticketed}"="0"]?:done)
+	same => n,GoSub(npstnbilling,${dtnum},1(${ss},${tt}))
+	same => n(done),Hangup()
+
+[dtcheck] ;NPSTN 20190212 NA ; value 2 = whether to return to [dt], value 3 = whether to play the clunk sound
+exten => 0,1,Return(TERMINATE,yes,yes)
+exten => _11N,1,Return(TERMINATE,yes,yes)
+exten => _N11,1,Return(TERMINATE,yes,yes)
+exten => 660,1,Return(TERMINATE,no,no)
+exten => _95[89],1,Return(TERMINATE,yes,no)
+exten => _NXXXXXX,1,Return(TERMINATE,yes,yes)
+exten => _1XXXXXXX,1,Return(TERMINATE,yes,yes)
+include => dtcheckdef
+
+[dtcheckdef] ; NPSTN 20190212 NA
+exten => _X!,1,Return(n,n,n)
+
+[dtroute] ; NPSTN 20190212 NA
+exten => _X!,1,Log(NOTICE, Call from ${CALLERID(all)} to ${EXTEN} via ${clli} DISA)
+	same => n,GoTo(dtdest,${EXTEN},1)
+exten => permsig,1,Log(NOTICE, Call from ${CALLERID(all)} at "${CHANNEL(peerip)}" timed out to permanent signal)
+	same => n,GoTo(dtdest,${EXTEN},1)
+
+[dtdest] ; NPSTN 20190212 NA
+exten => permsig,1,Playback(custom/permsig)
+	same => n,Playback(custom/crybaby)
+	same => n,Hangup
+	exten => _${OC1}XXXX,1,GoTo(local,${EXTEN},1)
+	exten => 0,1,GoTo(dtnpstn,${EXTEN},1)
+	exten => _11N,1,GoTo(dtnpstn,${EXTEN},1)
+	exten => _N11,1,GoTo(dtnpstn,${EXTEN},1)
+	exten => 660,1,GoTo(dtnpstn,${EXTEN},1)
+	exten => _95[89],1,GoTo(dtnpstn,${EXTEN},1)
+	exten => _101XXXX,1,GoTo(dtnpstn,${EXTEN},1)
+	exten => _NXXXXXX,1,GoTo(dtnpstn,${EXTEN},1)
+	exten => _1XXXXXXX,1,GoTo(dtnpstn,${EXTEN},1)
+	include => invalidincoming
+
+;;;;;;;;;;;;;;;;;;;;;;
+; npstn network code ;
+;;;;;;;;;;;;;;;;;;;;;;
+[dtnpstn]
+exten => _X!,1,Set(originalclid=${CALLERID(all)}) ; Any other calls should be sent "out" to NPSTN
+	same => n,GoSub(npstn-out-verify,${EXTEN},1)
+	same => n,GotoIf($["${GOSUB_RETVAL}"="0"]?npstn-out-blocked,s,1)
+	same => n,GoSub(dialnpstn,start,1(${EXTEN},disable,${zipcode},${maindisa}))
+	same => n,Set(CALLERID(all)=${originalclid})
+	same => n,Hangup()
+
+[dialnpstn] ; NPSTN 20190215 NA ; Sends a call to NPSTN
+exten => start,1,Set(num=${ARG1})
+	same => n,GotoIf($[${LEN("${ARG4}")}>2]?clidoverride)
+	same => n,Set(lookup=${SHELL(curl "https://crtc.npstn.us/api/v1/?lookup=${ARG1}&cid=${CALLERID(num)}&sntandem=${ARG2}&zipcode=${ARG3}")})
+	same => n,GoTo(verify)
+	same => n(clidoverride),Set(lookup=${SHELL(curl "https://crtc.npstn.us/api/v1/?lookup=${ARG1}&cid=${ARG4}&sntandem=${ARG2}&zipcode=${ARG3}")})
+	same => n(verify),GoSub(lookupchan,s,1(${lookup})) ; verifies lookup for extra security
+	same => n,GotoIf($["${GOSUB_RETVAL}"="0"]?npstn-BLOCKED,1)
+	same => n,NoOp(NPSTN ROUTE TO: ${lookup})
+	same => n,Dial(${lookup},,g)
+	same => n,GoTo(npstn-${DIALSTATUS},1)
+exten => npstn-ANSWER,1,Return()
+exten => npstn-BUSY,1,GoSub(busy,s,1)
+	same => n,Return()
+exten => npstn-CONGESTION,1,GoSub(allcktsbusy,s,1)
+	same => n,Return()
+exten => npstn-CHANUNAVAIL,1,GoSub(reorder,s,1)
+	same => n,Return()
+exten => npstn-NOANSWER,1,GoSub(allcktsbusy,s,1)
+	same => n,Return()
+exten => npstn-BLOCKED,1,GoSub(ccad,s,1)
+	same => n,Return()
+exten => _npstn-.,1,Return()
+
+[npstnbilling] ; NPSTN NA 20190504 NPSTN Toll Ticketing; EXTEN= number dialed, ARG1= start time of call in seconds, ARG2= datetime that the call started
+exten => _X!,1,GoToIf($["${ARG1}"=""]?done)
+	same => n,Set(endtime=${STRFTIME(${EPOCH},,%s)})
+	same => n,Set(duration=$[${endtime} -${ARG1}]) ; can't use ${CDR(billsec)}
+	same => n,GoToIf($["${ARG3}"=""]?:special)
+	same => n,Set(type=direct)
+	same => n,GoTo(request)
+	same => n(special),Set(type=${ARG3})
+	same => n(request),Set(request=${SHELL(curl "https://npstn.us/api/billing/?ani=${FILTER(0-9A-Za-z,${CALLERID(num)})}&callee=${FILTER(0-9,${EXTEN})}&type=${type}&duration=${duration}&key=${npstnkey}&clli=${clli}&year=${ARG2:0:4}&month=${ARG2:5:2}&day=${ARG2:8:2}&hr=${ARG2:11:2}&min=${ARG2:14:2}&sec=${ARG2:17:2}")})
+	same => n(done),Set(__ticketed=1)
+	same => n,Return()
